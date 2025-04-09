@@ -1,0 +1,263 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import LinearSVC
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, roc_curve, auc
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem import PorterStemmer
+import re
+import string
+import tensorflow as tf
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Embedding, LSTM, Dense, Dropout
+
+# Download necessary NLTK resources
+nltk.download('stopwords')
+nltk.download('punkt')
+
+# Load the dataset (using IMDB dataset as an example)
+def load_data():
+    # For example: load IMDB dataset from Kaggle
+    print("Loading dataset...")
+    df = pd.read_csv('IMDB_Dataset.csv')
+    # Map sentiment to numeric values
+    sentiment_map = {'positive': 1, 'negative': 0}
+    df['sentiment'] = df['sentiment'].map(sentiment_map)
+    return df
+
+# Text preprocessing
+def preprocess_text(text):
+    # Convert to lowercase
+    text = text.lower()
+    # Remove HTML tags
+    text = re.sub('<.*?>', '', text)
+    # Remove punctuation
+    text = text.translate(str.maketrans('', '', string.punctuation))
+    # Remove numbers
+    text = re.sub(r'\d+', '', text)
+    # Tokenize
+    tokens = nltk.word_tokenize(text)
+    # Remove stopwords
+    stop_words = set(stopwords.words('english'))
+    tokens = [word for word in tokens if word not in stop_words]
+    # Stemming
+    stemmer = PorterStemmer()
+    tokens = [stemmer.stem(word) for word in tokens]
+    # Join tokens back into a string
+    return ' '.join(tokens)
+
+# Apply preprocessing to the dataset
+def prepare_data(df):
+    print("Preprocessing text data...")
+    df['processed_text'] = df['review'].apply(preprocess_text)
+    X = df['processed_text']
+    y = df['sentiment']
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    return X_train, X_test, y_train, y_test
+
+# Traditional ML approach with TF-IDF
+def traditional_ml_models(X_train, X_test, y_train, y_test):
+    print("Training traditional ML models...")
+    # TF-IDF Vectorization
+    tfidf_vectorizer = TfidfVectorizer(max_features=5000)
+    X_train_tfidf = tfidf_vectorizer.fit_transform(X_train)
+    X_test_tfidf = tfidf_vectorizer.transform(X_test)
+    
+    # Train models
+    models = {
+        'Naive Bayes': MultinomialNB(),
+        'Logistic Regression': LogisticRegression(max_iter=1000),
+        'Linear SVC': LinearSVC()
+    }
+    
+    results = {}
+    
+    for name, model in models.items():
+        print(f"Training {name}...")
+        model.fit(X_train_tfidf, y_train)
+        y_pred = model.predict(X_test_tfidf)
+        
+        # Store results
+        results[name] = {
+            'accuracy': accuracy_score(y_test, y_pred),
+            'classification_report': classification_report(y_test, y_pred)
+        }
+        
+        # Plot confusion matrix
+        plt.figure(figsize=(8, 6))
+        cm = confusion_matrix(y_test, y_pred)
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+        plt.title(f'Confusion Matrix - {name}')
+        plt.xlabel('Predicted')
+        plt.ylabel('True')
+        plt.show()
+        
+        # For models that support predict_proba
+        if hasattr(model, 'predict_proba'):
+            y_prob = model.predict_proba(X_test_tfidf)[:, 1]
+            fpr, tpr, _ = roc_curve(y_test, y_prob)
+            roc_auc = auc(fpr, tpr)
+            
+            plt.figure(figsize=(8, 6))
+            plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
+            plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+            plt.xlabel('False Positive Rate')
+            plt.ylabel('True Positive Rate')
+            plt.title(f'ROC Curve - {name}')
+            plt.legend(loc="lower right")
+            plt.show()
+    
+    return results, tfidf_vectorizer
+
+# Deep Learning approach with LSTM
+def deep_learning_model(X_train, X_test, y_train, y_test):
+    print("Training deep learning model...")
+    # Tokenize text
+    max_features = 10000  # Top words to consider
+    max_len = 200  # Max sequence length
+    
+    tokenizer = Tokenizer(num_words=max_features)
+    tokenizer.fit_on_texts(X_train)
+    
+    X_train_seq = tokenizer.texts_to_sequences(X_train)
+    X_test_seq = tokenizer.texts_to_sequences(X_test)
+    
+    X_train_pad = pad_sequences(X_train_seq, maxlen=max_len)
+    X_test_pad = pad_sequences(X_test_seq, maxlen=max_len)
+    
+    # Define model architecture
+    model = Sequential()
+    model.add(Embedding(max_features, 128, input_length=max_len))
+    model.add(LSTM(128, dropout=0.2, recurrent_dropout=0.2))
+    model.add(Dense(64, activation='relu'))
+    model.add(Dropout(0.5))
+    model.add(Dense(1, activation='sigmoid'))
+    
+    # Compile model
+    model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+    
+    # Train model
+    history = model.fit(
+        X_train_pad, y_train,
+        batch_size=64,
+        epochs=5,
+        validation_split=0.2,
+        verbose=1
+    )
+    
+    # Evaluate model
+    scores = model.evaluate(X_test_pad, y_test, verbose=1)
+    print(f"LSTM Test Accuracy: {scores[1]:.4f}")
+    
+    # Plot training history
+    plt.figure(figsize=(12, 4))
+    plt.subplot(1, 2, 1)
+    plt.plot(history.history['accuracy'], label='Training Accuracy')
+    plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+    plt.title('Model Accuracy')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.legend()
+    
+    plt.subplot(1, 2, 2)
+    plt.plot(history.history['loss'], label='Training Loss')
+    plt.plot(history.history['val_loss'], label='Validation Loss')
+    plt.title('Model Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+    
+    # Generate predictions
+    y_pred_prob = model.predict(X_test_pad)
+    y_pred = (y_pred_prob > 0.5).astype(int)
+    
+    # Print classification report
+    print("Classification Report (LSTM):")
+    print(classification_report(y_test, y_pred))
+    
+    # Plot confusion matrix
+    plt.figure(figsize=(8, 6))
+    cm = confusion_matrix(y_test, y_pred)
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+    plt.title('Confusion Matrix - LSTM')
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.show()
+    
+    # Plot ROC curve
+    fpr, tpr, _ = roc_curve(y_test, y_pred_prob)
+    roc_auc = auc(fpr, tpr)
+    
+    plt.figure(figsize=(8, 6))
+    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('ROC Curve - LSTM')
+    plt.legend(loc="lower right")
+    plt.show()
+    
+    return model, tokenizer, history
+
+# Main function to execute the project
+def main():
+    # Load data
+    df = load_data()
+    
+    # Print dataset info
+    print("Dataset Information:")
+    print(f"Shape: {df.shape}")
+    print(f"Columns: {df.columns}")
+    print(f"Sample data:\n{df.head()}")
+    print(f"Class distribution:\n{df['sentiment'].value_counts()}")
+    
+    # Prepare data
+    X_train, X_test, y_train, y_test = prepare_data(df)
+    
+    # Train traditional ML models
+    traditional_results, tfidf_vectorizer = traditional_ml_models(X_train, X_test, y_train, y_test)
+    
+    # Train deep learning model
+    lstm_model, tokenizer, history = deep_learning_model(X_train, X_test, y_train, y_test)
+    
+    # Print results summary
+    print("\nResults Summary:")
+    for model_name, results in traditional_results.items():
+        print(f"{model_name} Accuracy: {results['accuracy']:.4f}")
+    
+    # Example of using the model for prediction
+    print("\nExample Predictions:")
+    example_reviews = [
+        "This movie was absolutely amazing! The plot was engaging and the acting was superb.",
+        "Terrible movie. The acting was wooden and the story made no sense at all.",
+        "It was okay. Not great, not terrible. Just an average film."
+    ]
+    
+    # Preprocess examples
+    processed_examples = [preprocess_text(review) for review in example_reviews]
+    
+    # Traditional ML prediction (using Logistic Regression as an example)
+    log_reg = traditional_results['Logistic Regression']['model'] if 'model' in traditional_results['Logistic Regression'] else None
+    if log_reg:
+        example_tfidf = tfidf_vectorizer.transform(processed_examples)
+        pred_trad = log_reg.predict(example_tfidf)
+        print("Logistic Regression predictions:", pred_trad)
+    
+    # LSTM prediction
+    example_seq = tokenizer.texts_to_sequences(processed_examples)
+    example_pad = pad_sequences(example_seq, maxlen=200)
+    pred_lstm = lstm_model.predict(example_pad)
+    print("LSTM predictions:", (pred_lstm > 0.5).astype(int).flatten())
+
+if __name__ == "__main__":
+    main()
